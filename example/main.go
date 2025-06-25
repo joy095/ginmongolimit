@@ -11,9 +11,7 @@ import (
 	"strings"
 	"time"
 
-	ginmongolimiter "github.com/joy095/mongolimiter/config"
-
-	"github.com/joho/godotenv"
+	ginmongolimiter "github.com/joy095/ginmongolimit"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -26,7 +24,6 @@ var limiterRegistry []*ginmongolimiter.RateLimiter
 
 // initMongoDB initializes and returns a MongoDB client and collection.
 func initMongoDB() (*mongo.Client, *mongo.Collection, error) {
-	godotenv.Load()
 
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
