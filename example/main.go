@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	ginmongolimiter "github.com/joy095/ginmongolimit"
+	ginmongolimiter "github.com/joy095/ginmongolimit" // Adjust import path as needed
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -24,6 +24,7 @@ var limiterRegistry []*ginmongolimiter.RateLimiter
 
 // initMongoDB initializes and returns a MongoDB client and collection.
 func initMongoDB() (*mongo.Client, *mongo.Collection, error) {
+	// godotenv.Load() is moved to main() for centralized environment loading
 
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
@@ -92,120 +93,110 @@ func createSingleRuleMiddleware(rlCollection *mongo.Collection, rate string, ope
 	return limiter.Middleware(), nil
 }
 
-// RegisterUserRoutes sets up all user-related routes with appropriate rate limiting.
-func RegisterUserRoutes(router *gin.Engine, combinedRateLimiter *ginmongolimiter.RateLimiter, rlCollection *mongo.Collection) {
+// RegisterAppRoutes sets up all application routes with appropriate rate limiting.
+func RegisterAppRoutes(router *gin.Engine, combinedRateLimiter *ginmongolimiter.RateLimiter, rlCollection *mongo.Collection) {
 
-	// Public routes
-	registerMiddleware, err := combinedRateLimiter.CombinedRateLimiter("register", "10-2m", "30-60m")
+	// --- Public Routes ---
+	// Public route with a single rate limiter
+	publicSingleMiddleware, err := createSingleRuleMiddleware(rlCollection, "10-1m", "public-single-test")
 	if err != nil {
-		log.Fatalf("Failed to create combined rate limiter for register: %v", err)
+		log.Fatalf("Failed to create public single limiter: %v", err)
 	}
-	router.POST("/register", registerMiddleware, userController.Register)
+	router.GET("/public/single-test", publicSingleMiddleware, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "Public single-rule test passed!"})
+	})
+	log.Println("Route /public/single-test: 10 requests per minute.")
 
-	loginMiddleware, err := combinedRateLimiter.CombinedRateLimiter("login", "10-2m", "30-30m")
+	// Public route with combined rate limits
+	publicCombinedMiddleware, err := combinedRateLimiter.CombinedRateLimiter("public-combined-test", "5-30s", "15-5m")
 	if err != nil {
-		log.Fatalf("Failed to create combined rate limiter for login: %v", err)
+		log.Fatalf("Failed to create public combined limiter: %v", err)
 	}
-	router.POST("/login", loginMiddleware, userController.Login)
+	router.GET("/public/combined-test", publicCombinedMiddleware, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "Public combined-rule test passed!"})
+	})
+	log.Println("Route /public/combined-test: 5 requests per 30s AND 15 requests per 5m.")
 
-	refreshTokenMiddleware, err := createSingleRuleMiddleware(rlCollection, "10-60m", "refresh-token")
-	if err != nil {
-		log.Fatalf("Failed to create refresh-token limiter: %v", err)
-	}
-	router.POST("/refresh-token", refreshTokenMiddleware, userController.RefreshToken)
-
-	usernameAvailabilityMiddleware, err := createSingleRuleMiddleware(rlCollection, "60-2m", "username-availability")
-	if err != nil {
-		log.Fatalf("Failed to create username-availability limiter: %v", err)
-	}
-	router.POST("/username-availability", usernameAvailabilityMiddleware, userController.UsernameAvailability)
-
-	forgotPasswordMiddleware, err := createSingleRuleMiddleware(rlCollection, "10-5m", "forgot-password")
-	if err != nil {
-		log.Fatalf("Failed to create forgot-password limiter: %v", err)
-	}
-	router.POST("/forgot-password", forgotPasswordMiddleware, userController.ForgotPassword)
-
-	forgotPasswordOTPMiddleware, err := combinedRateLimiter.CombinedRateLimiter("forgot-password-otp", "5-1m", "20-10m")
-	if err != nil {
-		log.Fatalf("Failed to create combined rate limiter for forgot-password-otp: %v", err)
-	}
-	router.POST("/forgot-password-otp", forgotPasswordOTPMiddleware, mail.VerifyForgotPasswordOTP)
-
-	changePasswordMiddleware, err := combinedRateLimiter.CombinedRateLimiter("change-password", "5-1m", "20-10m")
-	if err != nil {
-		log.Fatalf("Failed to create combined rate limiter for change-password: %v", err)
-	}
-	router.POST("/change-password", changePasswordMiddleware, userController.ChangePassword)
-
-	resendOTPMiddleware, err := combinedRateLimiter.CombinedRateLimiter("resend-otp", "5-1m", "20-10m")
-	if err != nil {
-		log.Fatalf("Failed to create combined rate limiter for resend-otp: %v", err)
-	}
-	router.POST("/resend-otp", resendOTPMiddleware, mail.ResendOTP)
-
-	verifyEmailMiddleware, err := combinedRateLimiter.CombinedRateLimiter("verify-email", "5-1m", "20-10m")
-	if err != nil {
-		log.Fatalf("Failed to create combined rate limiter for verify-email: %v", err)
-	}
-	router.POST("/verify-email", verifyEmailMiddleware, mail.VerifyEmail)
-
-	// Protected routes
-	protected := router.Group("/")
-	protected.Use(authMiddleware())
+	// --- Private/Protected Routes ---
+	protected := router.Group("/private")
+	protected.Use(authMiddleware()) // Apply authentication middleware first
 	{
-		logoutMiddleware, err := combinedRateLimiter.CombinedRateLimiter("logout", "5-1m", "20-10m")
+		// Private route with a single rate limiter
+		privateSingleMiddleware, err := createSingleRuleMiddleware(rlCollection, "5-10s", "private-single-data")
 		if err != nil {
-			log.Fatalf("Failed to create combined rate limiter for logout: %v", err)
+			log.Fatalf("Failed to create private single limiter: %v", err)
 		}
-		protected.POST("/logout", logoutMiddleware, userController.Logout)
+		protected.GET("/single-data", privateSingleMiddleware, func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"message": "Private single-rule data accessed!"})
+		})
+		log.Println("Route /private/single-data: 5 requests per 10s (requires auth).")
 
-		getProfileMiddleware, err := createSingleRuleMiddleware(rlCollection, "30-1m", "profile")
+		// Private route with combined rate limits
+		privateCombinedMiddleware, err := combinedRateLimiter.CombinedRateLimiter("private-combined-action", "3-1m", "10-1h")
 		if err != nil {
-			log.Fatalf("Failed to create get-profile limiter: %v", err)
+			log.Fatalf("Failed to create private combined limiter: %v", err)
 		}
-		protected.GET("/profile", getProfileMiddleware, userController.GetMyProfile)
-
-		updateProfileMiddleware, err := combinedRateLimiter.CombinedRateLimiter("update-profile", "5-1m", "10-5m")
-		if err != nil {
-			log.Fatalf("Failed to create combined rate limiter for update-profile: %v", err)
-		}
-		protected.PATCH("/update-profile", updateProfileMiddleware, userController.UpdateProfile)
-
-		updateEmailMiddleware, err := combinedRateLimiter.CombinedRateLimiter("update-email", "5-1m", "30-60m")
-		if err != nil {
-			log.Fatalf("Failed to create combined rate limiter for update-email: %v", err)
-		}
-		protected.POST("/update-email", updateEmailMiddleware, userController.UpdateEmailWithPassword)
-
-		verifyEmailUpdateOTPMiddleware, err := combinedRateLimiter.CombinedRateLimiter("verify-email-update-otp", "5-1m", "30-60m")
-		if err != nil {
-			log.Fatalf("Failed to create combined rate limiter for verify-email-update-otp: %v", err)
-		}
-		protected.POST("/verify-email-update-otp", verifyEmailUpdateOTPMiddleware, userController.VerifyEmailChangeOTP)
+		protected.POST("/combined-action", privateCombinedMiddleware, func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"message": "Private combined-rule action performed!"})
+		})
+		log.Println("Route /private/combined-action: 3 requests per 1m AND 10 requests per 1h (requires auth).")
 	}
 
-	// Public routes for viewing basic user info
-	public := router.Group("/public")
-	{
-		// Added the requested middleware for public-user route
-		getPublicProfileMiddleware, err := createSingleRuleMiddleware(rlCollection, "30-1m", "public-user")
-		if err != nil {
-			log.Fatalf("Failed to create public-user limiter: %v", err)
+	// --- Admin Routes for Management (Optional, for testing/resetting limits) ---
+	admin := router.Group("/admin")
+	admin.POST("/reset-rate-limit/:key", func(c *gin.Context) {
+		key := c.Param("key")
+		for _, limiter := range limiterRegistry {
+			if err := limiter.Reset(key); err != nil {
+				log.Printf("Warning: Failed to reset limiter for key %s: %v", key, err)
+			}
 		}
-		public.GET("/user/:username", getPublicProfileMiddleware, userController.GetPublicUserProfile)
-	}
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("Attempted to reset rate limit for key prefix '%s'", key)})
+	})
+
+	admin.GET("/rate-limit-stats/:key", func(c *gin.Context) {
+		key := c.Param("key")
+		var foundStats *ginmongolimiter.RateLimitEntry
+		var err error
+
+		// Check all registered limiters for stats on the exact key
+		for _, limiter := range limiterRegistry {
+			stats, currentErr := limiter.GetStats(key)
+			if currentErr != nil {
+				log.Printf("Error getting stats from a limiter: %v", currentErr)
+				err = currentErr // Keep track of the first error
+			}
+			if stats != nil {
+				foundStats = stats
+				break // Found stats, no need to check other limiters for this exact key
+			}
+		}
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if foundStats == nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "No rate limit data found for exact key"})
+			return
+		}
+		c.JSON(http.StatusOK, foundStats)
+	})
 }
 
 func main() {
+	// godotenv.Load() // Load environment variables from .env file
+
 	mongoClient, dynamicCollection, err := initMongoDB()
 	if err != nil {
 		log.Fatalf("Error initializing MongoDB: %v", err)
 	}
 	defer func() {
+		// Stop all registered limiters' background routines
 		for _, limiter := range limiterRegistry {
 			limiter.Stop()
 		}
+		// Disconnect MongoDB client
 		if err = mongoClient.Disconnect(context.Background()); err != nil {
 			log.Printf("Error disconnecting from MongoDB: %v", err)
 		} else {
@@ -215,6 +206,7 @@ func main() {
 
 	r := gin.Default()
 
+	// Initialize a single combined rate limiter instance to be reused by combined routes
 	combinedRLConfig := ginmongolimiter.DefaultConfig(dynamicCollection)
 	combinedRLConfig.KeyGenerator = ginmongolimiter.KeyGenerators{}.ByIP
 	combinedRLConfig.Debug = true
@@ -223,76 +215,32 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create combined rate limiter instance: %v", err)
 	}
-	limiterRegistry = append(limiterRegistry, combinedRateLimiter)
+	limiterRegistry = append(limiterRegistry, combinedRateLimiter) // Add to registry
 
-	RegisterUserRoutes(r, combinedRateLimiter, dynamicCollection)
+	// Register all application routes
+	RegisterAppRoutes(r, combinedRateLimiter, dynamicCollection)
 
 	log.Println("Server starting on :8080")
 	r.Run(":8080")
 }
 
-// Placeholder Controllers and Mail functions (replace with your actual implementations)
-type UserController struct{}
-
-func NewUserController() *UserController { return &UserController{} }
-func (uc *UserController) Register(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "User registered"})
-}
-func (uc *UserController) Login(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "User logged in"})
-}
-func (uc *UserController) RefreshToken(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Token refreshed"})
-}
-func (uc *UserController) UsernameAvailability(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Username available"})
-}
-func (uc *UserController) ForgotPassword(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Forgot password request"})
-}
-func (uc *UserController) ChangePassword(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Password changed"})
-}
-func (uc *UserController) Logout(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "User logged out"})
-}
-func (uc *UserController) GetMyProfile(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"profile": "My profile data"})
-}
-func (uc *UserController) UpdateProfile(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Profile updated"})
-}
-func (uc *UserController) UpdateEmailWithPassword(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Email update requested"})
-}
-func (uc *UserController) VerifyEmailChangeOTP(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Email update OTP verified"})
-}
-func (uc *UserController) GetPublicUserProfile(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"public_profile": "Public user data"})
-}
-
-type MailController struct{}
-
-var mail = &MailController{}
-
-func (mc *MailController) VerifyForgotPasswordOTP(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Forgot password OTP verified"})
-}
-func (mc *MailController) ResendOTP(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "OTP re-sent"})
-}
-func (mc *MailController) VerifyEmail(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Email verification successful"})
-}
-
-var userController = NewUserController() // Initialize once
-
-// authMiddleware for demonstration purposes.
+// Placeholder auth middleware for demonstration purposes.
 func authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Simulate successful authentication and set user_id and user_role in context
 		c.Set("user_id", "demoUser123")
 		c.Set("user_role", "user")
+		// In a real app, you might check a header like "Authorization"
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Authorization required"})
+			c.Abort()
+			return
+		}
+		// Simulate successful auth. For a true "admin" test, you'd parse JWT/session.
+		if strings.Contains(authHeader, "admin") { // Simple check for demo purposes
+			c.Set("user_role", "admin")
+		}
 		c.Next()
 	}
 }
