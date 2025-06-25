@@ -19,5 +19,5 @@ A **highly-configurable rate limiting middleware** for [Gin](https://github.com/
 ## 📦 Installation
 
 ```bash
-go get github.com/joy095/mongolimiter
+go get https://github.com/joy095/ginmongolimit
 ```
